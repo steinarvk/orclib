@@ -29,13 +29,21 @@ func TypeOf(x interface{}) (*Type, error) {
 	return naiveTypeOf(x)
 }
 
-func naiveTypeOf(x interface{}) (*Type, error) {
-	// A naive implementation. Both for a quick-and-dirty proof of concept,
-	// and for usage in tests as a reference implementation.
-	// This should be "obviously correct" at great performance cost.
-
-	if x == nil {
-		return Null, nil
+// Normalize JSON object so that it is (shallowly) one of the basic JSON types.
+func Normalize(x interface{}) (interface{}, error) {
+	switch v := x.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return v, nil
+	case float64:
+		return v, nil
+	case bool:
+		return v, nil
+	case map[string]interface{}:
+		return v, nil
+	case []interface{}:
+		return v, nil
 	}
 
 	marshalled, err := json.Marshal(x)
@@ -48,7 +56,19 @@ func naiveTypeOf(x interface{}) (*Type, error) {
 		return nil, fmt.Errorf("Value %v (Go type %v) cannot be normalized as JSON: %v", x, reflect.TypeOf(x), err)
 	}
 
-	switch unmarshalled.(type) {
+	return unmarshalled, nil
+}
+
+func naiveTypeOf(x interface{}) (*Type, error) {
+	// A naive implementation. Both for a quick-and-dirty proof of concept,
+	// and for usage in tests as a reference implementation.
+	// This should be "obviously correct" at great performance cost.
+	norm, err := Normalize(x)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to normalize value %v (Go type %v): %v", x, reflect.TypeOf(x), err)
+	}
+
+	switch norm.(type) {
 	case map[string]interface{}:
 		return Object, nil
 	case []interface{}:

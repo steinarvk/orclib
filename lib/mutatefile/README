@@ -1,0 +1,1 @@
+mutatefile: a library for altering data in files semi-atomically (i.e. write-then-rename)

@@ -1,0 +1,1 @@
+pgpencrypt: a convenience wrapper on top of golang.org/x/crypto/openpgp, providing an easy way to encrypt data to a GPG/PGP key

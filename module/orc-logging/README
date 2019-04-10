@@ -1,1 +1,1 @@
-orc-logging: an Orc library to initialize logrus (a logging library) and manage related flags
+orc-logging: an Orc module to initialize logrus (a logging library) and manage related flags

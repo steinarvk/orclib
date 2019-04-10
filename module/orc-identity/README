@@ -1,0 +1,1 @@
+orc-identity: an Orc module standardizing a way for programs to identify themselves (e.g. tying together various IDs, version information, and public keys, etc.) and using global state to allow other modules to gradually build this identity during initialization

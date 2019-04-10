@@ -27,7 +27,7 @@ func main() {
 		logrus.Fatal(err)
 	}
 
-	fmt.Println(prettyjson.Format(shape))
+	fmt.Println(prettyjson.Format(shape.AsJSONSchema()))
 
 	if err := jsonshape.Show(os.Stdout, shape); err != nil {
 		logrus.Fatal(err)

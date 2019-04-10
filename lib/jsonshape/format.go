@@ -10,10 +10,7 @@ import (
 )
 
 func showPrimitive(shape Shape) ([]string, error) {
-	short, ok, err := ShortSchemaDescription(shape)
-	if err != nil {
-		return nil, err
-	}
+	short, ok := shape.CompactShapeDescription()
 	if ok {
 		return []string{"<" + short + ">"}, nil
 	}
@@ -81,6 +78,10 @@ func show(shape Shape, fieldName string) ([]string, error) {
 		}
 
 		for _, field := range fields {
+			optionalMarker := ""
+			if field.Optional {
+				optionalMarker = "?"
+			}
 			if isArrayShape(field.Shape) {
 				subshape, err := shapeItemShape(field.Shape)
 				if err != nil {
@@ -90,13 +91,13 @@ func show(shape Shape, fieldName string) ([]string, error) {
 				if err != nil {
 					return nil, err
 				}
-				fmt.Fprintf(w, "%s[]:%s", field.Name, showLines(lines))
+				fmt.Fprintf(w, "%s[]%s:%s", field.Name, optionalMarker, showLines(lines))
 			} else {
 				lines, err := show(field.Shape, field.Name)
 				if err != nil {
 					return nil, err
 				}
-				fmt.Fprintf(w, "%s:%s", field.Name, showLines(lines))
+				fmt.Fprintf(w, "%s%s:%s", field.Name, optionalMarker, showLines(lines))
 			}
 		}
 
@@ -113,12 +114,9 @@ func show(shape Shape, fieldName string) ([]string, error) {
 		fmt.Fprintf(w, "[]:%s", showLines(lines))
 
 	case isAnyofShape(shape):
-		desc, ok, err := ShortSchemaDescription(shape)
-		if err != nil {
-			return nil, err
-		}
+		desc, ok := shape.CompactShapeDescription()
 		if ok {
-			return []string{desc}, nil
+			return []string{"<" + desc + ">"}, nil
 		}
 		subshapes, err := anyofOptions(shape)
 		if err != nil {

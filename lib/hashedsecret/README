@@ -1,0 +1,1 @@
+hashedsecret: a library for hashing a timestamp, a hostname, and a shared secret as a simple authorization check

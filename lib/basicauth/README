@@ -1,0 +1,1 @@
+basicauth: a wrapper library for github.com/abbot/go-http-auth, checking basic auth against htpasswd files

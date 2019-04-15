@@ -9,6 +9,7 @@ type AttemptInfo struct {
 	GatekeeperID string `json:"gatekeeper_id"`
 	Username     string `json:"username,omitempty"`
 	Realm        string `json:"realm,omitempty"`
+	Attempted    bool   `json:"attempted"`
 }
 
 type AuthSuccessInfo struct {

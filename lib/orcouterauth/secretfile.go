@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+
+	"github.com/steinarvk/orclib/lib/orchash"
 )
 
 type legacySecret struct {
@@ -17,6 +19,13 @@ func loadSecret(filename string) (*Secret, error) {
 		if err != nil {
 			return fmt.Errorf("Read error: %v", err)
 		}
+
+		secretHash := orchash.ComputeHash(data)
+		defer func() {
+			if rv.Secret != "" && rv.Name == "" {
+				rv.Name = secretHash
+			}
+		}()
 
 		if err := json.Unmarshal(data, &rv); err != nil {
 			return fmt.Errorf("JSON unmarshal error: %v", err)

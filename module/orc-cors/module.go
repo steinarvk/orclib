@@ -3,8 +3,11 @@ package orccors
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/steinarvk/orc"
 	"github.com/steinarvk/orclib/module/orc-debug"
 	"github.com/steinarvk/sectiontrace"
@@ -31,7 +34,7 @@ func (m *Module) ModuleName() string {
 
 type corsPolicy interface {
 	String() string
-	CheckCORS(request *http.Request) (*corsResponse, error)
+	CheckCORS(request *http.Request) corsResponse
 }
 
 var M = &Module{}
@@ -43,32 +46,40 @@ func corsMiddleware(policy corsPolicy) *httpmiddleware.Middleware {
 		return sectiontrace.WrapHandler(handlerSection, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			origin := req.Header.Get("Origin")
 
-			resp := policy.Check(req)
-
-			if !resp.allow {
+			if origin == "" {
 				metricCORSChecks.With(prometheus.Labels{
 					"method":     req.Method,
-					"had_origin": origin != "",
-					"allow":      "false",
+					"had_origin": "false",
+					"allow":      "true",
 				}).Inc()
-				w.WriteHeader(http.StatusUnauthorized)
-				w.Write([]byte("Unauthorized"))
-				return
-			}
+			} else {
+				resp := policy.CheckCORS(req)
 
-			if origin != "" {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-			}
+				if !resp.allow {
+					metricCORSChecks.With(prometheus.Labels{
+						"method":     req.Method,
+						"had_origin": "true",
+						"allow":      "false",
+					}).Inc()
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write([]byte("Unauthorized"))
+					return
+				}
 
-			if len(resp.allowMethods) > 0 {
-				w.Header().Set("Access-Control-Allow-Methods", string.Join(resp.allowMethods, ","))
-			}
+				if origin != "" {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+				}
 
-			metricCORSChecks.With(prometheus.Labels{
-				"method":     req.Method,
-				"had_origin": origin != "",
-				"allow":      "true",
-			}).Inc()
+				if len(resp.allowMethods) > 0 {
+					w.Header().Set("Access-Control-Allow-Methods", strings.Join(resp.allowMethods, ","))
+				}
+
+				metricCORSChecks.With(prometheus.Labels{
+					"method":     req.Method,
+					"had_origin": "true",
+					"allow":      "true",
+				}).Inc()
+			}
 
 			next.ServeHTTP(w, req)
 		}))
@@ -89,28 +100,28 @@ type corsResponse struct {
 type allowAllGetPolicy struct{}
 
 func (_ allowAllGetPolicy) String() string { return "AllowAllGet" }
-func (_ allowAllGetPolicy) CheckCors(req *http.Request) corsResponse {
+func (_ allowAllGetPolicy) CheckCORS(req *http.Request) corsResponse {
 	return corsResponse{
 		allow:        true,
 		allowMethods: []string{"GET"},
-	}, nil
+	}
 }
 
 type denyAllPolicy struct{}
 
 func (_ denyAllPolicy) String() string { return "DenyAll" }
-func (_ denyAllPolicy) CheckCors(req *http.Request) corsResponse {
+func (_ denyAllPolicy) CheckCORS(req *http.Request) corsResponse {
 	return corsResponse{
 		allow: false,
-	}, nil
+	}
 }
 
 func parseCORSPolicy(s string) (corsPolicy, error) {
 	if s == "*" {
-		return allowAllPolicy{}
+		return allowAllGetPolicy{}, nil
 	}
 	if s == "deny" {
-		return denyAllPolicy{}
+		return denyAllPolicy{}, nil
 	}
 	return nil, fmt.Errorf("Unable to parse CORS policy: %q", s)
 }

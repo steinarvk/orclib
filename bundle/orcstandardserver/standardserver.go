@@ -4,6 +4,7 @@ import (
 	"github.com/steinarvk/orc"
 	"github.com/steinarvk/orclib/lib/versioninfo"
 	canonicalhost "github.com/steinarvk/orclib/module/orc-canonicalhost"
+	orccors "github.com/steinarvk/orclib/module/orc-cors"
 	orcephemeralkeys "github.com/steinarvk/orclib/module/orc-ephemeralkeys"
 	httprouter "github.com/steinarvk/orclib/module/orc-httprouter"
 	identity "github.com/steinarvk/orclib/module/orc-identity"
@@ -33,6 +34,7 @@ var baseModules = []orc.Module{
 	orcprometheus.M,
 	publickeyregistry.M,
 	sectiontraceapi.M,
+	orccors.M,
 }
 
 var WithoutIdentity = &orc.ModuleBundle{

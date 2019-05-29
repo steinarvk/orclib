@@ -6,6 +6,7 @@ type Stage int
 
 const (
 	RequestReceived = Stage(1000)
+	CorsCheck       = Stage(1500)
 	Auth            = Stage(2000)
 	RequestAccepted = Stage(3000)
 )

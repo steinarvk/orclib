@@ -13,11 +13,15 @@ import (
 	httpmiddleware "github.com/steinarvk/orclib/module/orc-httpmiddleware"
 )
 
+type Hijacker func(http.ResponseWriter, *http.Request) bool
+
 var (
 	OuterMiddlewareM   = httpmiddleware.NewModule("Outer")
 	DebugMiddlewareM   = httpmiddleware.NewModule("Debug")
 	MetricsMiddlewareM = httpmiddleware.NewModule("Debug")
 	MainMiddlewareM    = httpmiddleware.NewModule("Main")
+
+	ConnectionHijackers = []Hijacker{}
 
 	middlewareModules = []orc.Module{
 		OuterMiddlewareM,
@@ -79,6 +83,13 @@ func (m *Module) MakeHandler(handlerName string, ht HandlerType) http.Handler {
 		}
 
 		req = req.WithContext(ctx)
+
+		for _, hijacker := range ConnectionHijackers {
+			didHijack := hijacker(w, req)
+			if didHijack {
+				return
+			}
+		}
 
 		wrapped.ServeHTTP(w, req)
 	})

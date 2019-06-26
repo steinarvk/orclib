@@ -129,6 +129,7 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	var metricsHtpasswds []string
 	var outerAuthConfigs []string
 	var disableInboundOuterAuth bool
+	var disableInboundDebugOuterAuth bool
 
 	hooks.OnUse(func(ctx orc.UseContext) {
 		ctx.Use(httprouter.M)
@@ -136,7 +137,8 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 		ctx.Use(orcdebug.M)
 
 		ctx.Flags.StringSliceVar(&outerAuthConfigs, "outer_auth", nil, "outer auth configuration for inbound and outbound requests")
-		ctx.Flags.BoolVar(&disableInboundOuterAuth, "disable_inbound_outer_auth", false, "disable outer auth for inbound requests (allowing all instead)")
+		ctx.Flags.BoolVar(&disableInboundOuterAuth, "disable_inbound_outer_auth", false, "disable outer auth for inbound requests (allowing all instead) for main")
+		ctx.Flags.BoolVar(&disableInboundDebugOuterAuth, "disable_inbound_debug_outer_auth", false, "disable outer auth for inbound requests (allowing all instead) for debug")
 
 		ctx.Flags.StringSliceVar(&debugHtpasswds, "debug_htpasswd", nil, "htpasswd file for inbound debug requests")
 		ctx.Flags.StringSliceVar(&metricsHtpasswds, "metrics_htpasswd", nil, "htpasswd file for inbound metrics requests")
@@ -171,6 +173,10 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 
 		if disableInboundOuterAuth {
 			mainOuterAuth = authinterface.AllowAll
+		}
+
+		if disableInboundDebugOuterAuth {
+			debugAuth = authinterface.AllowAll
 		}
 
 		outgoingDesc := "(none)"

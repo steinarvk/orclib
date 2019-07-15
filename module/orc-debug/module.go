@@ -8,6 +8,7 @@ import (
 
 	"github.com/steinarvk/orc"
 
+	"github.com/steinarvk/orclib/lib/versioninfo"
 	canonicalhost "github.com/steinarvk/orclib/module/orc-canonicalhost"
 	httprouter "github.com/steinarvk/orclib/module/orc-httprouter"
 )
@@ -39,6 +40,16 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	})
 
 	hooks.OnStart(func() error {
+		if versioninfo.ProgramName != "" {
+			entries := versioninfo.MakeJSON().(map[string]interface{})
+			tbl := Table{TableName: "Version info"}
+			for key, valueIntf := range entries {
+				row := Row{Key: key, Value: valueIntf.(string)}
+				tbl.Rows = append(tbl.Rows, row)
+			}
+			m.Status.AddTable(func() Table { return tbl })
+		}
+
 		httprouter.M.HandleDebug("/stacktrace", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			pprof.Lookup("goroutine").WriteTo(w, 1)
 		}))

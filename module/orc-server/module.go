@@ -1,8 +1,10 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -14,6 +16,23 @@ import (
 var Server *http.Server
 var ListenAndServe func() error
 
+type ListenAddress struct {
+	Host      string
+	Port      int
+	NoTLSPort int
+}
+
+type ListenPromise interface {
+	GetListenAddresses() ListenAddress
+}
+
+type TLSPromise interface {
+	GetTLSConfig(hostname string) (*tls.Config, error)
+}
+
+var ExternalTLS TLSPromise
+var ExternalListen ListenPromise
+
 type Module struct {
 	Addr string
 }
@@ -21,6 +40,13 @@ type Module struct {
 var M = &Module{}
 
 func (m *Module) ModuleName() string { return "Server" }
+
+func hostnameOnly(addr string) string {
+	if strings.Contains(addr, ":") {
+		return strings.Split(addr, ":")[0]
+	}
+	return addr
+}
 
 func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	var flagListenHost string
@@ -34,20 +60,29 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	var flagDebugListenHost string
 	var flagMetricsPort int
 	var flagMetricsListenHost string
+	var flagNoTLSListenAddr string
 
 	hooks.OnUse(func(ctx orc.UseContext) {
 		ctx.Use(httprouter.M)
 
-		ctx.Flags.StringVar(&flagMetricsListenHost, "metrics_host", "", "host on which to listen for metrics, if not same as debug port")
-		ctx.Flags.IntVar(&flagMetricsPort, "metrics_port", 0, "port on which to listen for debug/metrics")
+		if ExternalListen == nil {
+			ctx.Flags.StringVar(&flagMetricsListenHost, "metrics_host", "", "host on which to listen for metrics, if not same as debug port")
+			ctx.Flags.IntVar(&flagMetricsPort, "metrics_port", 0, "port on which to listen for debug/metrics")
 
-		ctx.Flags.StringVar(&flagDebugListenHost, "debug_host", "", "host on which to listen for debug/metrics, if not same as main port")
-		ctx.Flags.IntVar(&flagDebugPort, "debug_port", 0, "port on which to listen for debug/metrics")
+			ctx.Flags.StringVar(&flagDebugListenHost, "debug_host", "", "host on which to listen for debug/metrics, if not same as main port")
+			ctx.Flags.IntVar(&flagDebugPort, "debug_port", 0, "port on which to listen for debug/metrics")
 
-		ctx.Flags.StringVar(&flagListenHost, "host", "", "host on which to listen")
-		ctx.Flags.IntVar(&flagPort, "port", 4155, "port on which to listen")
-		ctx.Flags.StringVar(&flagServeTLSCertificate, "tls_cert", "", "TLS certificate file to use for serving")
-		ctx.Flags.StringVar(&flagServeTLSKey, "tls_key", "", "TLS key file to use for serving")
+			ctx.Flags.StringVar(&flagNoTLSListenAddr, "notls_addr", "", "host on which to listen without TLS")
+
+			ctx.Flags.StringVar(&flagListenHost, "host", "", "host on which to listen")
+			ctx.Flags.IntVar(&flagPort, "port", 4155, "port on which to listen")
+		}
+
+		if ExternalTLS == nil {
+			ctx.Flags.StringVar(&flagServeTLSCertificate, "tls_cert", "", "TLS certificate file to use for serving")
+			ctx.Flags.StringVar(&flagServeTLSKey, "tls_key", "", "TLS key file to use for serving")
+		}
+
 		ctx.Flags.IntVar(&flagMaxHeaderBytes, "max_header_bytes", 1<<20, "max header bytes to accept")
 		ctx.Flags.DurationVar(&flagReadTimeout, "read_timeout", 10*time.Second, "request read timeout")
 		ctx.Flags.DurationVar(&flagWriteTimeout, "write_timeout", 10*time.Second, "request write timeout")
@@ -61,11 +96,49 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	hooks.OnStart(func() error {
 		logrus.Infof("Running server on %q.", m.Addr)
 
-		listenAndServeOn := func(srv *http.Server) error {
-			if flagServeTLSCertificate != "" || flagServeTLSKey != "" {
+		if ExternalListen != nil {
+			addrs := ExternalListen.GetListenAddresses()
+			flagListenHost = addrs.Host
+			flagPort = addrs.Port
+			if addrs.NoTLSPort != 0 {
+				flagNoTLSListenAddr = fmt.Sprintf("%s:%d", flagListenHost, addrs.NoTLSPort)
+			}
+
+			m.Addr = fmt.Sprintf("%s:%d", flagListenHost, flagPort)
+		}
+
+		listenAndServeOn := func(srv *http.Server, withoutTLS bool) error {
+			switch {
+			case withoutTLS:
+				logrus.Infof("Serving raw HTTP on %q", srv.Addr)
+				return srv.ListenAndServe()
+			case ExternalTLS != nil:
+				tlsConfig, err := ExternalTLS.GetTLSConfig(hostnameOnly(srv.Addr))
+				if err != nil {
+					return err
+				}
+
+				tlsConfig.NextProtos = append(tlsConfig.NextProtos, "h2", "http/1.1")
+
+				if tlsConfig == nil {
+					logrus.Infof("Serving raw HTTP on %q", srv.Addr)
+					return srv.ListenAndServe()
+				}
+
+				logrus.Infof("Serving TLS on %q (configuration not from file)", srv.Addr)
+
+				listener, err := tls.Listen("tcp", srv.Addr, tlsConfig)
+				if err != nil {
+					return err
+				}
+				defer listener.Close()
+
+				return srv.Serve(listener)
+
+			case flagServeTLSCertificate != "" || flagServeTLSKey != "":
 				logrus.Infof("Serving TLS on %q from certificate=%q key=%q", srv.Addr, flagServeTLSCertificate, flagServeTLSKey)
 				return srv.ListenAndServeTLS(flagServeTLSCertificate, flagServeTLSKey)
-			} else {
+			default:
 				logrus.Infof("Serving raw HTTP on %q", srv.Addr)
 				return srv.ListenAndServe()
 			}
@@ -91,7 +164,7 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			logrus.Infof("Running debug/metrics server on %q.", debugAddr)
 
 			go func() {
-				if err := listenAndServeOn(debugServer); err != nil {
+				if err := listenAndServeOn(debugServer, false); err != nil {
 					logrus.Infof("Debug/metrics server shut down with error: %v", err)
 				}
 			}()
@@ -113,7 +186,7 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			logrus.Infof("Running metrics server on %q.", metricsAddr)
 
 			go func() {
-				if err := listenAndServeOn(metricsServer); err != nil {
+				if err := listenAndServeOn(metricsServer, false); err != nil {
 					logrus.Infof("Metrics server shut down with error: %v", err)
 				}
 			}()
@@ -128,7 +201,17 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 		Server = mainServer
 
 		ListenAndServe = func() error {
-			return listenAndServeOn(mainServer)
+			if flagNoTLSListenAddr != "" {
+				serverCopy := *mainServer
+				serverCopy.Addr = flagNoTLSListenAddr
+				go func() {
+					if err := listenAndServeOn(&serverCopy, true); err != nil {
+						logrus.Infof("NoTLS server shut down with error: %v", err)
+					}
+				}()
+			}
+
+			return listenAndServeOn(mainServer, false)
 		}
 
 		return nil

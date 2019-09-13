@@ -21,6 +21,10 @@ import (
 )
 
 var (
+	DefaultDisableInboundAuth bool = false
+)
+
+var (
 	metricOuterAuthRequests = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "outer_auth_requests",
 		Help: "Number of requests for which outer auth was processed.",
@@ -137,8 +141,8 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 		ctx.Use(orcdebug.M)
 
 		ctx.Flags.StringSliceVar(&outerAuthConfigs, "outer_auth", nil, "outer auth configuration for inbound and outbound requests")
-		ctx.Flags.BoolVar(&disableInboundOuterAuth, "disable_inbound_outer_auth", false, "disable outer auth for inbound requests (allowing all instead) for main")
-		ctx.Flags.BoolVar(&disableInboundDebugOuterAuth, "disable_inbound_debug_outer_auth", false, "disable outer auth for inbound requests (allowing all instead) for debug")
+		ctx.Flags.BoolVar(&disableInboundOuterAuth, "disable_inbound_outer_auth", DefaultDisableInboundAuth, "disable outer auth for inbound requests (allowing all instead) for main")
+		ctx.Flags.BoolVar(&disableInboundDebugOuterAuth, "disable_inbound_debug_outer_auth", DefaultDisableInboundAuth, "disable outer auth for inbound requests (allowing all instead) for debug")
 
 		ctx.Flags.StringSliceVar(&debugHtpasswds, "debug_htpasswd", nil, "htpasswd file for inbound debug requests")
 		ctx.Flags.StringSliceVar(&metricsHtpasswds, "metrics_htpasswd", nil, "htpasswd file for inbound metrics requests")

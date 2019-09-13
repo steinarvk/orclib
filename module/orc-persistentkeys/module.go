@@ -12,11 +12,20 @@ import (
 	orctinkgcpkms "github.com/steinarvk/orclib/module/orc-tinkgcpkms"
 )
 
+var (
+	FakePersistentKeys bool = false
+)
+
 type Module struct {
 	Keys *orckeys.Keys
 }
 
-func (m *Module) ModuleName() string { return "PersistentKeys" }
+func (m *Module) ModuleName() string {
+	if FakePersistentKeys {
+		return "FakePersistentKeys"
+	}
+	return "PersistentKeys"
+}
 
 var M = &Module{}
 
@@ -27,8 +36,10 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 	hooks.OnUse(func(ctx orc.UseContext) {
 		ctx.Use(orctinkgcpkms.M)
 		ctx.Use(canonicalhost.M)
-		ctx.Flags.StringVar(&keysFilename, "keys_filename", "", "name of file from which to load server keys")
-		ctx.Flags.BoolVar(&debugOrcKeysGenerate, "debug_generate_keys", false, "(for debugging convenience) generate new server keys that will not be persisted")
+		if !FakePersistentKeys {
+			ctx.Flags.StringVar(&keysFilename, "keys_filename", "", "name of file from which to load server keys")
+			ctx.Flags.BoolVar(&debugOrcKeysGenerate, "debug_generate_keys", false, "(for debugging convenience) generate new server keys that will not be persisted")
+		}
 	})
 
 	hooks.OnStart(func() error {
@@ -36,7 +47,16 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			return fmt.Errorf("Cannot specify both --debug_generate_keys and --keys_filename")
 		}
 
-		if debugOrcKeysGenerate {
+		switch {
+		case FakePersistentKeys:
+			keys, err := orckeys.Generate(canonicalhost.M.CanonicalHost)
+			if err != nil {
+				return fmt.Errorf("Error generating keys (FakePersistentKeys): %v", err)
+			}
+
+			m.Keys = keys
+
+		case debugOrcKeysGenerate:
 			keys, err := orckeys.Generate(canonicalhost.M.CanonicalHost)
 			if err != nil {
 				return fmt.Errorf("Error generating keys (--debug_generate_keys): %v", err)
@@ -45,7 +65,8 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			logrus.Warningf("--debug_generate_keys: generated new keys, server has no persistent keys")
 
 			m.Keys = keys
-		} else {
+
+		default:
 			if keysFilename == "" {
 				return fmt.Errorf("Missing --keys_filename (or --debug_generate_keys)")
 			}

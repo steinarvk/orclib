@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -17,9 +18,15 @@ var Server *http.Server
 var ListenAndServe func() error
 
 type ListenAddress struct {
-	Host      string
-	Port      int
-	NoTLSPort int
+	Host            string
+	Port            int
+	NoTLSPort       int
+	RandomPort      bool
+	RandomNoTLSPort bool
+}
+
+type ListenSpy interface {
+	ReportListening(name string, addr string)
 }
 
 type ListenPromise interface {
@@ -32,6 +39,7 @@ type TLSPromise interface {
 
 var ExternalTLS TLSPromise
 var ExternalListen ListenPromise
+var ExternalListenSpy ListenSpy
 
 type Module struct {
 	Addr string
@@ -100,18 +108,42 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			addrs := ExternalListen.GetListenAddresses()
 			flagListenHost = addrs.Host
 			flagPort = addrs.Port
-			if addrs.NoTLSPort != 0 {
+			if addrs.NoTLSPort != 0 || addrs.RandomNoTLSPort {
+				if addrs.RandomNoTLSPort && addrs.NoTLSPort != 0 {
+					return fmt.Errorf("RandomNoTLSPort but NoTLSPort = %d", addrs.NoTLSPort)
+				}
 				flagNoTLSListenAddr = fmt.Sprintf("%s:%d", flagListenHost, addrs.NoTLSPort)
+			}
+
+			if addrs.Port == 0 && !addrs.RandomPort {
+				return fmt.Errorf("!RandomPort but Port = 0")
 			}
 
 			m.Addr = fmt.Sprintf("%s:%d", flagListenHost, flagPort)
 		}
 
-		listenAndServeOn := func(srv *http.Server, withoutTLS bool) error {
+		listenAndCallback := func(name string, addr string, serve func(lis net.Listener) error) error {
+			listener, err := net.Listen("tcp", addr)
+			if err != nil {
+				return err
+			}
+
+			defer listener.Close()
+
+			if ExternalListenSpy != nil {
+				ExternalListenSpy.ReportListening(name, listener.Addr().String())
+			}
+
+			return serve(listener)
+		}
+
+		listenAndServeOn := func(name string, srv *http.Server, withoutTLS bool) error {
 			switch {
 			case withoutTLS:
 				logrus.Infof("Serving raw HTTP on %q", srv.Addr)
-				return srv.ListenAndServe()
+				return listenAndCallback(name, srv.Addr, func(lis net.Listener) error {
+					return srv.Serve(lis)
+				})
 			case ExternalTLS != nil:
 				tlsConfig, err := ExternalTLS.GetTLSConfig(hostnameOnly(srv.Addr))
 				if err != nil {
@@ -122,7 +154,9 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 
 				if tlsConfig == nil {
 					logrus.Infof("Serving raw HTTP on %q", srv.Addr)
-					return srv.ListenAndServe()
+					return listenAndCallback(name, srv.Addr, func(lis net.Listener) error {
+						return srv.Serve(lis)
+					})
 				}
 
 				logrus.Infof("Serving TLS on %q (configuration not from file)", srv.Addr)
@@ -133,14 +167,22 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 				}
 				defer listener.Close()
 
+				if ExternalListenSpy != nil {
+					ExternalListenSpy.ReportListening(name, listener.Addr().String())
+				}
+
 				return srv.Serve(listener)
 
 			case flagServeTLSCertificate != "" || flagServeTLSKey != "":
 				logrus.Infof("Serving TLS on %q from certificate=%q key=%q", srv.Addr, flagServeTLSCertificate, flagServeTLSKey)
-				return srv.ListenAndServeTLS(flagServeTLSCertificate, flagServeTLSKey)
+				return listenAndCallback(name, srv.Addr, func(lis net.Listener) error {
+					return srv.ServeTLS(lis, flagServeTLSCertificate, flagServeTLSKey)
+				})
 			default:
 				logrus.Infof("Serving raw HTTP on %q", srv.Addr)
-				return srv.ListenAndServe()
+				return listenAndCallback(name, srv.Addr, func(lis net.Listener) error {
+					return srv.Serve(lis)
+				})
 			}
 		}
 
@@ -164,7 +206,7 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			logrus.Infof("Running debug/metrics server on %q.", debugAddr)
 
 			go func() {
-				if err := listenAndServeOn(debugServer, false); err != nil {
+				if err := listenAndServeOn("debug", debugServer, false); err != nil {
 					logrus.Infof("Debug/metrics server shut down with error: %v", err)
 				}
 			}()
@@ -186,7 +228,7 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 			logrus.Infof("Running metrics server on %q.", metricsAddr)
 
 			go func() {
-				if err := listenAndServeOn(metricsServer, false); err != nil {
+				if err := listenAndServeOn("metrics", metricsServer, false); err != nil {
 					logrus.Infof("Metrics server shut down with error: %v", err)
 				}
 			}()
@@ -205,13 +247,13 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 				serverCopy := *mainServer
 				serverCopy.Addr = flagNoTLSListenAddr
 				go func() {
-					if err := listenAndServeOn(&serverCopy, true); err != nil {
+					if err := listenAndServeOn("notls", &serverCopy, true); err != nil {
 						logrus.Infof("NoTLS server shut down with error: %v", err)
 					}
 				}()
 			}
 
-			return listenAndServeOn(mainServer, false)
+			return listenAndServeOn("main", mainServer, false)
 		}
 
 		return nil

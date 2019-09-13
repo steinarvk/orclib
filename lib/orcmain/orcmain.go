@@ -8,6 +8,7 @@ import (
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/steinarvk/orclib/lib/versioninfo"
 )
@@ -31,8 +32,10 @@ func Init(programName string, rootCommand *cobra.Command) {
 			}
 
 			viper.AddConfigPath(filepath.Join(home, fmt.Sprintf(".config/%s", programName)))
-			viper.SetConfigName(fmt.Sprintf("%s.yaml", programName))
+			viper.SetConfigName(programName)
 		}
+
+		viper.SetEnvPrefix("ORC")
 
 		viper.AutomaticEnv()
 		if err := viper.ReadInConfig(); err != nil {
@@ -49,6 +52,8 @@ func Init(programName string, rootCommand *cobra.Command) {
 }
 
 func Main(rootCommand *cobra.Command) {
+	viper.BindPFlags(pflag.CommandLine)
+
 	if err := rootCommand.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)

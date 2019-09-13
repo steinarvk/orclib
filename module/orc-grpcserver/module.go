@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/steinarvk/orc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	orcdebug "github.com/steinarvk/orclib/module/orc-debug"
 	httprouter "github.com/steinarvk/orclib/module/orc-httprouter"
@@ -49,6 +50,9 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 
 	hooks.OnSetup(func() error {
 		m.Server = grpc.NewServer()
+
+		reflection.Register(m.Server)
+
 		orcdebug.M.Status.AddTable(func() orcdebug.Table {
 			return orcdebug.Table{
 				TableName: "gRPC server",

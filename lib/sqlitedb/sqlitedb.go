@@ -161,6 +161,11 @@ func (d *Database) startup(ctx context.Context) error {
 		return fmt.Errorf("Invalid schema: missing name")
 	}
 
+	_, err := d.db.Exec(`PRAGMA foreign_keys = ON;`)
+	if err != nil {
+		return fmt.Errorf("Unable to enable foreign_keys: %v", err)
+	}
+
 	exists, err := doesMetatableExist(ctx, d.db)
 	if err != nil {
 		return err
@@ -372,14 +377,22 @@ type PreparedExec struct {
 	queryName string
 }
 
-func (p *PreparedExec) Exec(ctx context.Context, tx *sql.Tx, argmap map[string]interface{}) error {
-	return p.section.Do(ctx, func(ctx context.Context) error {
-		_, err := tx.Stmt(p.stmt).ExecContext(ctx, fromArgmap(argmap)...)
+func (p *PreparedExec) ExecWithResult(ctx context.Context, tx *sql.Tx, argmap map[string]interface{}) (sql.Result, error) {
+	var rv sql.Result
+	err := p.section.Do(ctx, func(ctx context.Context) error {
+		result, err := tx.Stmt(p.stmt).ExecContext(ctx, fromArgmap(argmap)...)
 		if err != nil {
 			return QueryFailed{p.queryName, err}
 		}
+		rv = result
 		return nil
 	})
+	return rv, err
+}
+
+func (p *PreparedExec) Exec(ctx context.Context, tx *sql.Tx, argmap map[string]interface{}) error {
+	_, err := p.ExecWithResult(ctx, tx, argmap)
+	return err
 }
 
 func (d *Database) PrepareExec(outErr *error, queryName, querySQL string) *PreparedExec {

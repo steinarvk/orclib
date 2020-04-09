@@ -16,7 +16,7 @@ import (
 
 type SchemaUpgrade struct {
 	Next int
-	Sql  string
+	Sql  []string
 }
 
 type Schema struct {
@@ -51,7 +51,7 @@ func (s *sectionmaker) Get(name string) sectiontrace.Section {
 	return sec
 }
 
-func SequentialUpgrades(upgrades ...string) map[int]SchemaUpgrade {
+func SequentialUpgrades(upgrades ...[]string) map[int]SchemaUpgrade {
 	m := map[int]SchemaUpgrade{}
 	for i, upgrade := range upgrades {
 		m[i] = SchemaUpgrade{Sql: upgrade}
@@ -97,19 +97,23 @@ func (s *Schema) Open(ctx context.Context, connstring string) (*Database, error)
 }
 
 func createMetatable(ctx context.Context, q Queryer, schemaName string) error {
-	sqlquery := `CREATE TABLE ___orcschema (
+	sqlquery1 := `CREATE TABLE ___orcschema (
 		name TEXT NOT NULL,
 		version INTEGER NOT NULL,
 		meta_version INTEGER NOT NULL
 	);
-	INSERT INTO ___orcschema (name, version, meta_version) VALUES ($1, $2, $3);
 	`
+	sqlquery2 := `INSERT INTO ___orcschema (name, version, meta_version) VALUES ($1, $2, $3);`
 
 	initialVersion := int(0)
 	initialMetaVersion := int(1)
 
-	if _, err := q.ExecContext(ctx, sqlquery, schemaName, initialVersion, initialMetaVersion); err != nil {
-		return fmt.Errorf("error creating metatable (1): %v", err)
+	if _, err := q.ExecContext(ctx, sqlquery1); err != nil {
+		return fmt.Errorf("error creating metatable: %v", err)
+	}
+
+	if _, err := q.ExecContext(ctx, sqlquery2, schemaName, initialVersion, initialMetaVersion); err != nil {
+		return fmt.Errorf("error creating metatable: %v", err)
 	}
 
 	return nil
@@ -247,7 +251,17 @@ func execStatement(ctx context.Context, q Queryer, stmt string, params ...interf
 	return err
 }
 
-func (d *Database) applyUpgrade(ctx context.Context, sqltext string, oldVer, newVer int) error {
+func execStatements(ctx context.Context, q Queryer, stmts []string) error {
+	for _, stmt := range stmts {
+		logrus.Infof("executing statement: %q", stmt)
+		if err := execStatement(ctx, q, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Database) applyUpgrade(ctx context.Context, sqltexts []string, oldVer, newVer int) error {
 	opts := &sql.TxOptions{Isolation: sql.LevelSerializable}
 	err := d.runInTransaction(ctx, opts, func(tx *sql.Tx) error {
 		_, version, err := getSchemaVersion(ctx, tx)
@@ -259,7 +273,7 @@ func (d *Database) applyUpgrade(ctx context.Context, sqltext string, oldVer, new
 			return fmt.Errorf("Version expectation mismatch during upgrade: upgrading %d => %d, yet version was %d", oldVer, newVer, version)
 		}
 
-		if err := execStatement(ctx, tx, sqltext); err != nil {
+		if err := execStatements(ctx, tx, sqltexts); err != nil {
 			return err
 		}
 
@@ -334,16 +348,28 @@ func (d *Database) Close() error {
 	return err
 }
 
-func fromArgmap(argmap map[string]interface{}) []interface{} {
-	var args []interface{}
+func fromArgmap(paramNames []string, argmap map[string]interface{}) ([]interface{}, error) {
+	args := make([]interface{}, len(paramNames))
 
-	if argmap != nil {
-		for k, v := range argmap {
-			args = append(args, sql.Named(k, v))
+	for i, name := range paramNames {
+		value, ok := argmap[name]
+		if !ok {
+			return nil, fmt.Errorf("missing parameter %q", name)
+		}
+		args[i] = value
+	}
+
+	if argmap == nil {
+		if len(paramNames) > 0 {
+			return nil, fmt.Errorf("want %d parameters got 0 (nil)", len(paramNames))
+		}
+	} else {
+		if len(paramNames) != len(argmap) {
+			return nil, fmt.Errorf("want %d parameters got %d", len(paramNames), len(argmap))
 		}
 	}
 
-	return args
+	return args, nil
 }
 
 type QueryFailed struct {
@@ -356,15 +382,21 @@ func (q QueryFailed) Error() string {
 }
 
 type PreparedExec struct {
-	section   sectiontrace.Section
-	stmt      *sql.Stmt
-	queryName string
+	section    sectiontrace.Section
+	stmt       *sql.Stmt
+	queryName  string
+	paramNames []string
 }
 
 func (p *PreparedExec) ExecWithResult(ctx context.Context, tx *sql.Tx, argmap map[string]interface{}) (sql.Result, error) {
 	var rv sql.Result
 	err := p.section.Do(ctx, func(ctx context.Context) error {
-		result, err := tx.Stmt(p.stmt).ExecContext(ctx, fromArgmap(argmap)...)
+		args, err := fromArgmap(p.paramNames, argmap)
+		if err != nil {
+			return QueryFailed{p.queryName, err}
+		}
+
+		result, err := tx.Stmt(p.stmt).ExecContext(ctx, args...)
 		if err != nil {
 			return QueryFailed{p.queryName, err}
 		}
@@ -379,29 +411,49 @@ func (p *PreparedExec) Exec(ctx context.Context, tx *sql.Tx, argmap map[string]i
 	return err
 }
 
-func (d *Database) PrepareExec(outErr *error, queryName, querySQL string) *PreparedExec {
+func (d *Database) PrepareInsertExec(outErr *error, tableName string, fieldNames []string) *PreparedExec {
+	sqlText := "INSERT INTO " + tableName + "("
+	sqlText += strings.Join(fieldNames, ",")
+	sqlText += ") VALUES ("
+	for i := range fieldNames {
+		if i > 0 {
+			sqlText += ","
+		}
+		sqlText += fmt.Sprintf("$%d", i+1)
+	}
+	sqlText += ");"
+	queryName := fmt.Sprintf("insert-%s-(%s)", tableName, strings.Join(fieldNames, ","))
+	return d.PrepareExec(outErr, queryName, sqlText, fieldNames...)
+}
+
+func (d *Database) PrepareExec(outErr *error, queryName, querySQL string, paramNames ...string) *PreparedExec {
 	if *outErr != nil {
 		return nil
 	}
 
 	stmt, err := d.db.Prepare(querySQL)
 	if err != nil {
-		*outErr = fmt.Errorf("Failed to prepare query %q: %v", queryName, err)
+		*outErr = fmt.Errorf("Failed to prepare query %q: %v"+`
+Query was: """
+%s
+"""`, queryName, err, querySQL)
 		return nil
 	}
 
 	sec := sections.Get(queryName)
 	return &PreparedExec{
-		section:   sec,
-		queryName: queryName,
-		stmt:      stmt,
+		section:    sec,
+		queryName:  queryName,
+		paramNames: paramNames,
+		stmt:       stmt,
 	}
 }
 
 type PreparedQuery struct {
-	section   sectiontrace.Section
-	stmt      *sql.Stmt
-	queryName string
+	section    sectiontrace.Section
+	stmt       *sql.Stmt
+	queryName  string
+	paramNames []string
 }
 
 func makeQueryDest(names []string, dest interface{}) ([]interface{}, error) {
@@ -444,7 +496,12 @@ func makeQueryDest(names []string, dest interface{}) ([]interface{}, error) {
 
 func (p *PreparedQuery) Query(ctx context.Context, tx *sql.Tx, argmap map[string]interface{}, dest interface{}, onrow func() (bool, error)) error {
 	return p.section.Do(ctx, func(ctx context.Context) error {
-		rows, err := tx.Stmt(p.stmt).QueryContext(ctx, fromArgmap(argmap)...)
+		args, err := fromArgmap(p.paramNames, argmap)
+		if err != nil {
+			return QueryFailed{p.queryName, err}
+		}
+
+		rows, err := tx.Stmt(p.stmt).QueryContext(ctx, args...)
 		if err != nil {
 			return QueryFailed{p.queryName, err}
 		}
@@ -465,9 +522,14 @@ func (p *PreparedQuery) Query(ctx context.Context, tx *sql.Tx, argmap map[string
 				return err
 			}
 
-			cont, err := onrow()
-			if err != nil {
-				return err
+			cont := true
+			var err error
+
+			if onrow != nil {
+				cont, err = onrow()
+				if err != nil {
+					return err
+				}
 			}
 
 			if !cont {
@@ -479,7 +541,7 @@ func (p *PreparedQuery) Query(ctx context.Context, tx *sql.Tx, argmap map[string
 	})
 }
 
-func (d *Database) PrepareQuery(outErr *error, queryName, querySQL string) *PreparedQuery {
+func (d *Database) PrepareQuery(outErr *error, queryName, querySQL string, paramNames ...string) *PreparedQuery {
 	if *outErr != nil {
 		return nil
 	}
@@ -492,8 +554,9 @@ func (d *Database) PrepareQuery(outErr *error, queryName, querySQL string) *Prep
 
 	sec := sections.Get(queryName)
 	return &PreparedQuery{
-		section:   sec,
-		queryName: queryName,
-		stmt:      stmt,
+		section:    sec,
+		queryName:  queryName,
+		stmt:       stmt,
+		paramNames: paramNames,
 	}
 }

@@ -365,7 +365,11 @@ func fromArgmap(paramNames []string, argmap map[string]interface{}) ([]interface
 		}
 	} else {
 		if len(paramNames) != len(argmap) {
-			return nil, fmt.Errorf("want %d parameters got %d", len(paramNames), len(argmap))
+			var ks []string
+			for k := range argmap {
+				ks = append(ks, k)
+			}
+			return nil, fmt.Errorf("want %d parameters got %d (%v)", len(paramNames), len(argmap), ks)
 		}
 	}
 

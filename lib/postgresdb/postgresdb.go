@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -78,8 +79,21 @@ type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 }
 
-func (s *Schema) Open(ctx context.Context, connstring string) (*Database, error) {
-	db, err := sql.Open("postgres", connstring)
+func (s *Schema) Open(ctx context.Context, rawConnstring, password string) (*Database, error) {
+	parsed, err := url.Parse(rawConnstring)
+	_, hasPassword := parsed.User.Password()
+	if hasPassword {
+		return nil, fmt.Errorf("postgres connection string should not contain password")
+	}
+
+	if parsed.User == nil {
+		parsed.User = &url.Userinfo{}
+	}
+	parsed.User = url.UserPassword(parsed.User.Username(), password)
+
+	secretConnstring := parsed.String()
+
+	db, err := sql.Open("postgres", secretConnstring)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to open database: %v", err)
 	}

@@ -79,7 +79,7 @@ type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 }
 
-func (s *Schema) Open(ctx context.Context, rawConnstring, password string) (*Database, error) {
+func OpenRawDB(ctx context.Context, rawConnstring, password string) (*sql.DB, error) {
 	parsed, err := url.Parse(rawConnstring)
 	_, hasPassword := parsed.User.Password()
 	if hasPassword {
@@ -96,6 +96,15 @@ func (s *Schema) Open(ctx context.Context, rawConnstring, password string) (*Dat
 	db, err := sql.Open("postgres", secretConnstring)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to open database: %v", err)
+	}
+
+	return db, nil
+}
+
+func (s *Schema) Open(ctx context.Context, rawConnstring, password string) (*Database, error) {
+	db, err := OpenRawDB(ctx, rawConnstring, password)
+	if err != nil {
+		return nil, err
 	}
 
 	rv := &Database{

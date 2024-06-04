@@ -8,10 +8,7 @@ import (
 )
 
 func New() (string, error) {
-	myUUID, err := uuid.NewV4()
-	if err != nil {
-		return "", err
-	}
+	myUUID := uuid.NewV4()
 	t := time.Now().Unix()
 	myID := myUUID.String()
 	return fmt.Sprintf("%d-%s", t, myID), nil

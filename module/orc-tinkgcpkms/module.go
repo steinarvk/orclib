@@ -1,6 +1,8 @@
 package orctinkgcpkms
 
 import (
+	"context"
+
 	"github.com/google/tink/go/core/registry"
 	"github.com/google/tink/go/integration/gcpkms"
 	"github.com/sirupsen/logrus"
@@ -22,10 +24,9 @@ func (m *Module) OnRegister(hooks orc.ModuleHooks) {
 		const (
 			prefix = "gcp-kms://"
 		)
-		client := &gcpkms.GCPClient{}
-		_, err := client.LoadDefaultCredentials()
+		client, err := gcpkms.NewClientWithOptions(context.TODO(), prefix)
 		if err != nil {
-			logrus.Infof("GCP KMS: %v", err)
+			logrus.Infof("GCP KMS error: %v", err)
 			return nil
 		}
 		registry.RegisterKMSClient(client)
